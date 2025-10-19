@@ -66,34 +66,34 @@ Place the following in the data/ folder:
 - Ground truth 3D bounding boxes (bboxes_3D_cam0)    
 
 3. Run the modules      
-Full pipeline with segmentation, projection, and evaluation:  
+ Full pipeline with segmentation, projection, and evaluation:  
 - python main.py  
 
-Rainbow depth map and car-only projection:    
+4. Rainbow depth map and car-only projection:    
 - python projection_visualizer.py  
 
-mAP and IoU evaluation with AP plot:    
+5. mAP and IoU evaluation with AP plot:    
 - python detection_metrics.py  
 
 📊 Sample Output    
 📍 Annotated Image  
-- ![Bounding boxes with confidence and IoU](Output/output_image_19.png)   
+- ![Bounding boxes with confidence and IoU](Output/output_image_19.png)
+    
 📍 Rainbow Depth Projection  
-![- Top: full LiDAR depth map  
-- Bottom: car-only points overlaid on RGB](Projection_images/projection_001.png)  
-📍 Evaluation Metrics  
-- ![Per-car precision, recall, F1-score  
-- Global image-level metrics] (car_stats.xlsx)  
-- ![Excel report](car_detection_results.xlsx)  
+- ![- Top: full LiDAR depth map - Bottom: car-only points overlaid on RGB](Projection_images/projection_001.png)  
+
+📍 Sample 3D point
+- ![3D point cloud](Output/image1.png)  
+
 📍 AP Plot  
-![AP Plot](C:\Users\ATHARVA\Downloads\proj\AP_plot.png)  
+![AP Plot](AP_plot.png)  
 
 📚 References  
 - 📘 [KITTI-360 Dataset](https://www.cvlibs.net/datasets/kitti-360/)  
 - 📘 [Ultralytics YOLOv8](https://docs.ultralytics.com/)  
 - 📘 RWU Lidar and Radar Systems Project Guidelines  
 
-👨‍🎓 Author
+👨‍🎓 Author  
 Atharva U. Dahitule  
 Master’s Student, Mechatronics Engineering  
 RWU Hochschule Ravensburg-Weingarten, Germany
