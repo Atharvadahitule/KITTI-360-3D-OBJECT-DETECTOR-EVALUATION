@@ -1,0 +1,7 @@
+ultralytics
+opencv-python
+numpy
+open3d
+pandas
+matplotlib
+scikit-learn

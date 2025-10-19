@@ -1,0 +1,180 @@
+import os
+import numpy as np
+import cv2
+import json
+import pandas as pd
+import matplotlib.pyplot as plt
+from ultralytics import YOLO
+from sklearn.metrics import precision_recall_curve, auc
+
+# --- Paths ---
+Input_images = r"KITTI-360_sample\data_2d_raw\2013_05_28_drive_0000_sync\image_00\data_rect"
+Output_folder = r"Output"
+Bounding_Boxes = r"KITTI-360_sample\bboxes_3D_cam0"
+Excel_output = "car_detection_results.xlsx"
+os.makedirs(Output_folder, exist_ok=True)
+
+# --- Camera intrinsics ---
+fx = 552.554261
+fy = 552.554261
+cx = 682.049453
+cy = 238.769549
+IMAGE_WIDTH = 1408
+IMAGE_HEIGHT = 376
+IOU_THRESH = 0.5
+
+def compute_iou(boxA, boxB):
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[2], boxB[2])
+    yB = min(boxA[3], boxB[3])
+    interW = max(0, xB - xA + 1)
+    interH = max(0, yB - yA + 1)
+    interArea = interW * interH
+    boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
+    boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
+    iou = interArea / float(boxAArea + boxBArea - interArea) if (boxAArea + boxBArea - interArea) > 0 else 0
+    return iou
+
+def load_3d_boxes(image_filename):
+    base_name = os.path.splitext(os.path.basename(image_filename))[0].lstrip('0') or "0"
+    json_path = os.path.join(Bounding_Boxes, f"BBoxes_{base_name}.json")
+    if not os.path.exists(json_path):
+        return []
+    with open(json_path, 'r') as f:
+        return json.load(f)
+
+def project_corners_to_2d(corners):
+    u = (fx * corners[:, 0] / np.maximum(corners[:, 2], 1e-10) + cx).astype(int)
+    v = (fy * corners[:, 1] / np.maximum(corners[:, 2], 1e-10) + cy).astype(int)
+    x_min, y_min = u.min(), v.min()
+    x_max, y_max = u.max(), v.max()
+    x_min, x_max = np.clip([x_min, x_max], 0, IMAGE_WIDTH-1)
+    y_min, y_max = np.clip([y_min, y_max], 0, IMAGE_HEIGHT-1)
+    return [int(x_min), int(y_min), int(x_max), int(y_max)]
+
+model = YOLO("yolo11x-seg.pt")
+CAR_CLASS_ID = 2
+
+load_image = sorted([os.path.join(Input_images, f) for f in os.listdir(Input_images) if f.endswith(".png")])
+print(f"Found {len(load_image)} images to process.")
+
+all_detections = []
+all_gts = []
+all_scores = []
+all_labels = []
+per_image_stats = []
+
+for idx, image_path in enumerate(load_image):
+    print(f"\nProcessing {image_path}")
+    image = cv2.imread(image_path)
+    if image is None:
+        print(f"Skipping {image_path}: could not read image")
+        continue
+
+    # --- Load GT 3D boxes and project to 2D ---
+    gt_boxes_2d = []
+    boxes = load_3d_boxes(image_path)
+    if not boxes:
+        print(f"No ground truth boxes found for {image_path}")
+    else:
+        for bbox in boxes:
+            corners = np.array(bbox["corners_cam0"])
+            gt_box_2d = project_corners_to_2d(corners)
+            gt_boxes_2d.append(gt_box_2d)
+    all_gts.append(gt_boxes_2d)
+
+    # --- YOLO Detection ---
+    detections = []
+    results = model(image)
+    car_count = 0
+    for r in results:
+        if hasattr(r, "boxes") and r.boxes is not None:
+            for obj in r.boxes:
+                class_id = int(obj.cls)
+                confidence = obj.conf.item()
+                if class_id == CAR_CLASS_ID:
+                    x_min, y_min, x_max, y_max = map(int, obj.xyxy[0])
+                    det_box = [x_min, y_min, x_max, y_max]
+                    best_iou = 0
+                    for gt_box in gt_boxes_2d:
+                        iou = compute_iou(det_box, gt_box)
+                        if iou > best_iou:
+                            best_iou = iou
+                    detections.append({'box': det_box, 'conf': confidence, 'iou': best_iou})
+                    all_scores.append(confidence)
+                    all_labels.append(1 if best_iou >= IOU_THRESH else 0)
+                    print(f"Detected Car: Conf={confidence:.2f}, Best IoU={best_iou:.3f}")
+                    cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0,255,0), 3)
+                    label = f"Conf:{confidence:.2f} IoU:{best_iou:.2f}"
+                    cv2.putText(image, label, (x_min, max(y_min - 10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,0), 2)
+                    car_count += 1
+    all_detections.append(detections)
+
+    # --- Draw GT boxes in red ---
+    for gt_box in gt_boxes_2d:
+        cv2.rectangle(image, (gt_box[0], gt_box[1]), (gt_box[2], gt_box[3]), (0,0,255), 2)
+
+    # --- Save annotated image ---
+    output_path = os.path.join(Output_folder, f"output_image_{idx+1}.png")
+    cv2.imwrite(output_path, image)
+    print(f"Saved output image: {output_path}")
+
+    # --- Per-image stats ---
+    avg_iou = np.mean([d['iou'] for d in detections]) if detections else 0
+    image_name = os.path.basename(image_path)
+    per_image_stats.append({
+        'Image Name': image_name,
+        'Detected Cars': car_count,
+        'GT Cars': len(gt_boxes_2d),
+        'Average IoU': round(avg_iou, 3)
+    })
+
+# --- Save stats to Excel ---
+if per_image_stats:
+    df = pd.DataFrame(per_image_stats)
+    if os.path.exists(Excel_output):
+        df_old = pd.read_excel(Excel_output)
+        df = pd.concat([df_old, df], ignore_index=True)
+    df.to_excel(Excel_output, index=False)
+
+# --- Compute and plot mAP at multiple IoU thresholds ---
+iou_thresholds = [0.5, 0.65, 0.75]
+aps = []
+
+for iou_thresh in iou_thresholds:
+    labels = []
+    scores = []
+
+    for det_list in all_detections:
+        for det in det_list:
+            labels.append(1 if det['iou'] >= iou_thresh else 0)
+            scores.append(det['conf'])
+
+    if labels:
+        precision, recall, _ = precision_recall_curve(labels, scores)
+        ap = auc(recall, precision)
+        aps.append(ap)
+        print(f"mAP@IoU={iou_thresh:.2f}: {ap:.3f}")
+    else:
+        aps.append(0.0)
+        print(f"mAP@IoU={iou_thresh:.2f}: No matches")
+
+# --- Plotting ---
+plt.figure(figsize=(8, 6))
+plt.plot(iou_thresholds, aps, marker='o', linestyle='-', color='blue', label='AP(Car)')
+plt.xlabel("IoU Threshold")
+plt.ylabel("Average Precision (AP)")
+plt.title("AP for Car Class at Different IoU Thresholds")
+plt.xticks(iou_thresholds)
+plt.ylim(0, 1.05)
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.text(0.52, 0.9, r"$\mathrm{AP} = \sum_{n=1}^{N} (R_n - R_{n-1}) \cdot P_n$", fontsize=12)
+plt.savefig("AP_plot.png")
+plt.show()
+
+print(f"\n--- All images processed ---")
+print(f"Excel results saved to {Excel_output}")
+print("AP plot saved to AP_plot.png")
